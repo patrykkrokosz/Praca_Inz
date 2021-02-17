@@ -3,14 +3,13 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
 
-public class Guard : MonoBehaviour
-{
+public class Guard : MonoBehaviour {
     public float speed = 5;
     public float waitTime = .3f;
     public float turnSpeed = 90;
     public float timeToSpotPlayer = .5f;
     public float meshResolution;
-    
+
     public float viewDistance;
     public LayerMask viewMask;
     public LayerMask obstacleMask;
@@ -27,7 +26,7 @@ public class Guard : MonoBehaviour
     public float nearViewDst;
     public float farViewDst;
     private float detectViewDst;
-    [Range(0,360)]
+    [Range(0, 360)]
     public float viewAngle;
 
     private float currentViewDstPenalty;
@@ -44,10 +43,19 @@ public class Guard : MonoBehaviour
     private IEnumerator followPathCoroutine;
     bool isFollowNormalRunning = false;
 
+
+    private IEnumerator followPathCautionCoroutine;
+    bool isFollowCautionRunning = false;
+
+    private IEnumerator lookAroundCoroutine;
+    bool isLookingAround = true;
+
     private Vector3 chasePoint;
     private int targetWaypointIndex = 1;
 
     private float guardSpeed; // It's 3.5
+    [Range (-90,90)]
+    public float turnViewAngle;
 
     void Start() {
 
@@ -58,7 +66,7 @@ public class Guard : MonoBehaviour
         farViewMesh = new Mesh();
         farViewMesh.name = "Far View Mesh";
         farViewMeshFilter.mesh = farViewMesh;
-        
+
         detectViewMesh = new Mesh();
         detectViewMesh.name = "Detect View Mesh";
         detectViewMeshFilter.mesh = detectViewMesh;
@@ -73,44 +81,33 @@ public class Guard : MonoBehaviour
         player = GameObject.FindGameObjectWithTag("Player").transform;
 
         GameManager.informGuardAlarmIsSetOff += alarmsBeenSetOffMate;
+        GameManager.informGuardCautionIsOn += cautionIsOnMate;
+        GameManager.informGuardReturnToNormal += returnToNormalMate;
 
-        Vector3[] waypoints = new Vector3[pathHolder.childCount];
+        WaypointInfo[] waypoints = new WaypointInfo[pathHolder.childCount];
         for (int i = 0; i < waypoints.Length; i++) {
-            waypoints[i] = pathHolder.GetChild(i).position;
-            waypoints[i] = new Vector3(waypoints[i].x, transform.position.y, waypoints[i].z);
+            waypoints[i] = new WaypointInfo(pathHolder.GetChild(i).position, pathHolder.GetChild(i).gameObject.GetComponent<Waypoint>().desiredViewAngle, pathHolder.GetChild(i).gameObject.GetComponent<Waypoint>().waitTime);
         }
 
-
+        lookAroundCoroutine = LookAround();
+        followPathCautionCoroutine = FollowPathCaution(waypoints);
         followPathCoroutine = FollowPath(waypoints);
         StartCoroutine(followPathCoroutine);
+        isFollowNormalRunning = true;
     }
 
     void Update() {
-        if (GameManagerStatic.gameManager.isAlarmSetOff() || GameManagerStatic.gameManager.isCautionOn()) {
-            StopAllCoroutines();
-            currentViewDstPenalty = GameManagerStatic.gameManager.getViewDstPenalty();
-            currentAnglePenalty = GameManagerStatic.gameManager.getViewAnglePenalty();
-        } else {
-            currentViewDstPenalty = 0f;
-            currentAnglePenalty = 0f;
-            agent.speed = guardSpeed;
-        }
-
         SpotPlayer();
     }
 
     void LateUpdate() {
         DrawFielOfView(nearViewMesh, (nearViewDst + currentViewDstPenalty));
         DrawFielOfView(farViewMesh, (farViewDst + currentViewDstPenalty));
-        DrawFielOfView(detectViewMesh, detectViewDst); 
+        DrawFielOfView(detectViewMesh, detectViewDst);
     }
 
     void SpotPlayer() {
-        if (!GameManagerStatic.gameManager.isAlarmSetOff()) {
-            if (!isFollowNormalRunning) {
-                isFollowNormalRunning = false;
-                StartCoroutine(followPathCoroutine);
-            }
+        if (!GameManagerStatic.gameManager.isCautionOn() && !GameManagerStatic.gameManager.isAlarmSetOff()) {
 
             if (CanSeePlayer((nearViewDst + currentViewDstPenalty)) || CanSeePlayer(detectViewDst)) {
                 GameManagerStatic.gameManager.reportPlayerPosition();
@@ -127,14 +124,48 @@ public class Guard : MonoBehaviour
                 detectViewDst = (farViewDst + currentViewDstPenalty) * (playerVisibleTimer / timeToSpotPlayer < 1 ? playerVisibleTimer / timeToSpotPlayer : 1);
             }
         }
-        else if(!GameManagerStatic.gameManager.isSearchOn()) {
+        else if (GameManagerStatic.gameManager.isCautionOn()) {
+
+            if (CanSeePlayer((nearViewDst + currentViewDstPenalty)) || CanSeePlayer(detectViewDst)) {
+                GameManagerStatic.gameManager.reportPlayerPosition();
+                GameManagerStatic.gameManager.setOffAlarm();
+            }
+            else {
+                if (CanSeePlayer(farViewDst + currentViewDstPenalty)) {
+                    playerVisibleTimer += Time.deltaTime;
+                    if (isLookingAround) {
+                        StopCoroutine(lookAroundCoroutine);
+                        isLookingAround = false;
+                    }
+                    if (isFollowCautionRunning) {
+                        agent.isStopped = true;
+                        StopCoroutine(followPathCautionCoroutine);
+                        isFollowCautionRunning = false;
+                    }
+                }
+                else {
+                    playerVisibleTimer -= Time.deltaTime;
+                    if (!isLookingAround) {
+                        StartCoroutine(lookAroundCoroutine);
+                        isLookingAround = true;
+                    }
+                    if (!isFollowCautionRunning) {
+                        StartCoroutine(followPathCautionCoroutine);
+                        isFollowCautionRunning = true;
+                    }
+                }
+                playerVisibleTimer = Mathf.Clamp(playerVisibleTimer, 0, timeToSpotPlayer);
+                detectViewDst = (farViewDst + currentViewDstPenalty) * (playerVisibleTimer / timeToSpotPlayer < 1 ? playerVisibleTimer / timeToSpotPlayer : 1);
+            }
+        }
+        else if (!GameManagerStatic.gameManager.isSearchOn()) {
             if (CanSeePlayer(detectViewDst))
                 GameManagerStatic.gameManager.reportPlayerPosition();
 
             agent.destination = GameManagerStatic.gameManager.getPlayerLocation();
 
             if (!agent.pathPending && agent.remainingDistance < 0.3f && !CanSeePlayer(detectViewDst))
-                GameManagerStatic.gameManager.reportMissingPlayer();            
+                GameManagerStatic.gameManager.reportMissingPlayer();
         }
         else {
             if (CanSeePlayer(detectViewDst)) {
@@ -151,24 +182,69 @@ public class Guard : MonoBehaviour
         }
     }
 
+    void noCorutinesRunning() {
+        isFollowNormalRunning = false;
+        isFollowCautionRunning = false;
+        isLookingAround = false;
+    }
+
     void alarmsBeenSetOffMate() {
         detectViewDst = farViewDst + GameManagerStatic.gameManager.getViewDstPenalty();
         playerVisibleTimer = timeToSpotPlayer;
         StopAllCoroutines();
-        isFollowNormalRunning = false;
+        noCorutinesRunning();
+        StartCoroutine(ResetViewAngle());;
+        isLookingAround = false;
         agent.isStopped = false;
-        agent.speed = guardSpeed + GameManagerStatic.gameManager.getGuardSpeedPenalty();
+        agent.speed = guardSpeed + GameManagerStatic.gameManager.getGuardAlarmSpeedPenalty();
         agent.destination = GameManagerStatic.gameManager.getPlayerLocation();
+        currentViewDstPenalty = GameManagerStatic.gameManager.getViewDstPenalty();
+        currentAnglePenalty = GameManagerStatic.gameManager.getViewAnglePenalty();
+    }
+
+    void cautionIsOnMate() {
+        StopAllCoroutines();
+        noCorutinesRunning();
+        StartCoroutine(followPathCautionCoroutine);
+        isFollowCautionRunning = true;
+        StartCoroutine(lookAroundCoroutine);
+        isLookingAround = true;
+        agent.speed = guardSpeed + GameManagerStatic.gameManager.getGuardCautionSpeedPenalty();
+    }
+
+    void returnToNormalMate() {
+        StopAllCoroutines();
+        noCorutinesRunning();
+        StartCoroutine(ResetViewAngle());
+        StartCoroutine(followPathCoroutine);
+        isFollowNormalRunning = true;
+        currentViewDstPenalty = 0f;
+        currentAnglePenalty = 0f;
+        agent.speed = guardSpeed;
     }
 
     bool CanSeePlayer(float dst) {
         if (GameManagerStatic.gameManager.isGameOver())
             return false;
-        if(Vector3.Distance(transform.position, player.position) < dst) {
+        if (Vector3.Distance(transform.position, player.position) < dst) {
+            if (viewAngle + currentAnglePenalty >= 360)
+                return true;
+
             Vector3 dirToPlayer = (player.position - transform.position).normalized;
             float angleBetweenGuardAndPlayer = Vector3.Angle(transform.forward, dirToPlayer);
-            if (angleBetweenGuardAndPlayer < (viewAngle + currentAnglePenalty) / 2f) {
-                if (!Physics.Linecast  (transform.position, player.position, obstacleMask)) {
+            if (Mathf.Sign(Vector3.Dot(transform.right, dirToPlayer)) < 0)
+                angleBetweenGuardAndPlayer = 360 - angleBetweenGuardAndPlayer;
+
+            float leftRangeAngle = ((360 - ((viewAngle + currentAnglePenalty) / 2f)) + turnViewAngle) % 360;
+            float rightRangeAngle = (((viewAngle + currentAnglePenalty) / 2f) + turnViewAngle) % 360;
+            if (rightRangeAngle < 0)
+                rightRangeAngle += 360;
+
+            Debug.Log("Left: " + leftRangeAngle + " Right: " + rightRangeAngle + " Player: " + angleBetweenGuardAndPlayer);
+
+            if (((leftRangeAngle > rightRangeAngle) && (angleBetweenGuardAndPlayer > leftRangeAngle || angleBetweenGuardAndPlayer < rightRangeAngle)) 
+                || (leftRangeAngle < angleBetweenGuardAndPlayer && rightRangeAngle > angleBetweenGuardAndPlayer )) {
+                if (!Physics.Linecast(transform.position, player.position, obstacleMask)) {
                     return true;
                 }
             }
@@ -176,10 +252,30 @@ public class Guard : MonoBehaviour
         return false;
     }
 
-    IEnumerator FollowPath(Vector3[] waypoints) {
+    IEnumerator FollowPath(WaypointInfo[] waypoints) {
         isFollowNormalRunning = true;
 
-        Vector3 targetWaypoint = waypoints[targetWaypointIndex];
+        Vector3 targetWaypoint = waypoints[targetWaypointIndex].position;
+
+        while (true) {
+            agent.destination = targetWaypoint;
+            agent.isStopped = false;
+            if (!agent.pathPending && agent.remainingDistance < 0.3f) {
+                agent.isStopped = true;
+                yield return StartCoroutine(TurnToFace(waypoints[targetWaypointIndex].desiredViewAngle));
+                yield return new WaitForSeconds(waypoints[targetWaypointIndex].waitTime);
+                targetWaypointIndex = (targetWaypointIndex + 1) % waypoints.Length;
+                targetWaypoint = waypoints[targetWaypointIndex].position;
+                yield return StartCoroutine(TurnToFace(waypoints[targetWaypointIndex].position));
+            }
+            yield return null;
+        }
+    }
+
+    IEnumerator FollowPathCaution(WaypointInfo[] waypoints) {
+        isFollowNormalRunning = true;
+
+        Vector3 targetWaypoint = waypoints[targetWaypointIndex].position;
 
         while (true) {
             agent.destination = targetWaypoint;
@@ -187,14 +283,20 @@ public class Guard : MonoBehaviour
             if (!agent.pathPending && agent.remainingDistance < 0.3f) {
                 agent.isStopped = true;
                 targetWaypointIndex = (targetWaypointIndex + 1) % waypoints.Length;
-                targetWaypoint = waypoints[targetWaypointIndex];
-                yield return new WaitForSeconds(waitTime);
-                yield return StartCoroutine(TurnToFace(targetWaypoint));
+                targetWaypoint = waypoints[targetWaypointIndex].position;
             }
             yield return null;
         }
     }
 
+    IEnumerator TurnToFace(float targetAngle) {
+        while (Mathf.Abs(Mathf.DeltaAngle(transform.eulerAngles.y, targetAngle)) > 0.05f) {
+            float angle = Mathf.MoveTowardsAngle(transform.eulerAngles.y, targetAngle, turnSpeed * Time.deltaTime);
+            transform.eulerAngles = Vector3.up * angle;
+            yield return null;
+        }
+    }
+    
     IEnumerator TurnToFace(Vector3 lookTarget) {
         Vector3 dirToLookTarget = (lookTarget - transform.position).normalized;
         float targetAngle = 90 - Mathf.Atan2(dirToLookTarget.z, dirToLookTarget.x) * Mathf.Rad2Deg;
@@ -206,19 +308,46 @@ public class Guard : MonoBehaviour
         }
     }
 
+
+    IEnumerator LookAround() {
+        bool raise = true;
+        while (true) {
+            if (raise)
+                turnViewAngle += 1;
+            else
+                turnViewAngle -= 1;
+            if (turnViewAngle <= -90 || turnViewAngle >= 90)
+                raise = !raise;
+            yield return new WaitForSeconds(0.01f);
+        }
+    }
+
+    IEnumerator ResetViewAngle() {
+        while (turnViewAngle != 0) {
+            if (turnViewAngle < 0)
+                turnViewAngle += 1;
+            else
+                turnViewAngle -= 1;
+            if (turnViewAngle <= 0.1f && turnViewAngle >= -0.1f)
+                turnViewAngle = 0;
+            yield return new WaitForSeconds(0.01f);
+        }
+        yield break;
+    }
+
     void DrawFielOfView(Mesh viewMesh, float viewDst) {
         int stepCount = Mathf.RoundToInt((viewAngle + currentAnglePenalty) * meshResolution);
         float stepAngleSize = (viewAngle + currentAnglePenalty) / stepCount;
         List<Vector3> viewPoints = new List<Vector3>();
         ViewCastInfo oldViewCast = new ViewCastInfo();
 
-        for(int i = 0; i <= stepCount; i++) {
-            float angle = transform.eulerAngles.y - (viewAngle + currentAnglePenalty) / 2 + stepAngleSize * i;
+        for (int i = 0; i <= stepCount; i++) {
+            float angle = transform.eulerAngles.y + turnViewAngle - (viewAngle + currentAnglePenalty) / 2 + stepAngleSize * i;
             ViewCastInfo newViewCast = ViewCast(angle, viewDst);
 
-            if(i > 0) {
+            if (i > 0) {
                 bool edgeDstThersholdExceeded = Mathf.Abs(oldViewCast.dst - newViewCast.dst) > edgeDstThreshhold;
-                if(oldViewCast.hit != newViewCast.hit || oldViewCast.hit && newViewCast.hit && edgeDstThersholdExceeded) {
+                if (oldViewCast.hit != newViewCast.hit || oldViewCast.hit && newViewCast.hit && edgeDstThersholdExceeded) {
                     EdgeInfo edge = FindEdge(oldViewCast, newViewCast, viewDst);
                     if (edge.pointA != Vector3.zero) {
                         viewPoints.Add(edge.pointA);
@@ -238,7 +367,7 @@ public class Guard : MonoBehaviour
         int[] triangles = new int[(vertexCount - 2) * 3];
 
         vertices[0] = Vector3.zero;
-        for(int i = 0; i < vertexCount - 1; i++) {
+        for (int i = 0; i < vertexCount - 1; i++) {
             vertices[i + 1] = transform.InverseTransformPoint(viewPoints[i]);
 
             if (i < vertexCount - 2) {
@@ -260,7 +389,7 @@ public class Guard : MonoBehaviour
         Vector3 minPoint = Vector3.zero;
         Vector3 maxPoint = Vector3.zero;
 
-        for(int i = 0; i < edgeResolveIterations; i++) {
+        for (int i = 0; i < edgeResolveIterations; i++) {
             float angle = (minAngle + maxAngle) / 2;
             ViewCastInfo newViewCast = ViewCast(angle, viewDst);
 
@@ -301,8 +430,9 @@ public class Guard : MonoBehaviour
         foreach (Transform waypoint in pathHolder) {
             Gizmos.DrawSphere(waypoint.position, .3f);
             Gizmos.DrawLine(previousPosition, waypoint.position);
+            Gizmos.DrawRay(waypoint.position, new Vector3(Mathf.Sin(waypoint.GetComponent<Waypoint>().desiredViewAngle * Mathf.Deg2Rad), 0, Mathf.Cos(waypoint.GetComponent<Waypoint>().desiredViewAngle * Mathf.Deg2Rad)));
             previousPosition = waypoint.position;
-        }
+        } 
         Gizmos.DrawLine(previousPosition, startPosition);
 
     }
@@ -331,6 +461,19 @@ public class Guard : MonoBehaviour
         }
     }
 
+
+    public struct WaypointInfo{
+        public Vector3 position;
+        public float desiredViewAngle;
+        public float waitTime;
+
+        public WaypointInfo(Vector3 _position, float _desiredViewAngle, float _waitTime) {
+            position = _position;
+            desiredViewAngle = _desiredViewAngle;
+            waitTime = _waitTime;
+        }
+
+    }
 
     bool RandomPoint(Vector3 center, float range, out Vector3 result) {
         for (int i = 0; i < 30; i++) {

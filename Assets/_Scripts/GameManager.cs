@@ -21,6 +21,8 @@ public class GameManager: MonoBehaviour {
     public static event System.Action ShowGameWinUI;
     public static event System.Action ShowGameLoseUI;
     public static event System.Action informGuardAlarmIsSetOff;
+    public static event System.Action informGuardCautionIsOn;
+    public static event System.Action informGuardReturnToNormal;
     public static event System.Action ShowGameCannotWinUI;
     public static event System.Action HideGameCannotWinUI;
 
@@ -37,7 +39,8 @@ public class GameManager: MonoBehaviour {
 
     public float viewDstPenalty;
     public float viewAnglePenalty;
-    public float guardSpeedPenalty;
+    public float guardAlarmSpeedPenalty;
+    public float guardCautionSpeedPenalty;
 
     void Start() {
         GameManagerStatic.gameManager = this;
@@ -63,6 +66,7 @@ public class GameManager: MonoBehaviour {
                 searchMode = false;
                 cautionMode = false;
                 GameManager.HideCautionUI();
+                GameManager.informGuardReturnToNormal();
             }
         }
     }
@@ -85,6 +89,7 @@ public class GameManager: MonoBehaviour {
         searchMode = false;
         cautionMode = true;
         cautionTime = 0f;
+        GameManager.informGuardCautionIsOn();
     }
 
     public void gameWin() {
@@ -129,8 +134,12 @@ public class GameManager: MonoBehaviour {
         return viewAnglePenalty;
     }
 
-    public float getGuardSpeedPenalty() {
-        return guardSpeedPenalty;
+    public float getGuardAlarmSpeedPenalty() {
+        return guardAlarmSpeedPenalty;
+    }
+
+    public float getGuardCautionSpeedPenalty() {
+        return guardCautionSpeedPenalty;
     }
 
     public bool isGameOver() {

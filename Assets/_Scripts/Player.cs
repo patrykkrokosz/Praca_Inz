@@ -34,10 +34,8 @@ public class Player : MonoBehaviour {
     }
 
     void OnCollisionEnter(Collision c) {
-
         if (c.collider.gameObject.tag == "Guard")
             GameManagerStatic.gameManager.gameLose();
-
     }
 
     void OnTriggerEnter(Collider hitCollider) {

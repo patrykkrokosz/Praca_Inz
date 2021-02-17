@@ -12,7 +12,6 @@ public class GameUI : MonoBehaviour
     public GameObject gameCautionUI;
     public GameObject gameCannotWinUI;
 
-
     void Start()
     {
         GameManager.ShowAlarmUI += showAlarmUI;
